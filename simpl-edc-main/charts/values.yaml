@@ -1,0 +1,44 @@
+deployment:
+  image: "${CI_REGISTRY_IMAGE}"
+  tag: "${PROJECT_RELEASE_VERSION}"
+
+resources:
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  limits:
+    cpu: 250m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 1Gi
+
+
+ingress:
+  enabled: true
+  apiPath: /api
+  managementPath: /management
+  protocolPath: /protocol
+  publicPath: /public
+  controlPath: /control
+  clusterIssuer: dev-prod
+  corsAllowOrigin: "*"
+
+contractmanager:
+  extension:
+    enabled: false
+  url: http://url:8080/contract/v1/
+
+serviceAccount:
+  enabled: true
+
+hashicorp:
+  role: "gaiax"
+  service: "https://vault.tools.simpl-europe.eu"
+
+secretEngine: kv/gaia-x
+
+# For hashicorp integration following url is /v1/kv/data/<secret_folder_name>/<secret_name> example /v1/kv/data/gaia-x/gaiax-edc-dev-catalogue-adapter-simpl-backend"
+# For OpenBao integration following url is /v1/<secret_folder_namer>/data/<secret_name> example /v1/common/data/authority01-adapter-simpl-backend
+secretConfigPath: "{{ .Values.secretEngine }}/{{ .Release.Namespace }}-simpl-edc"

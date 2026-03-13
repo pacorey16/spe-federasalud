@@ -1,0 +1,29 @@
+# ArgoCD Application manifest for EDC Connector Adapter
+# This file defines how the application should be deployed to the Kubernetes cluster
+
+# Project name in ArgoCD
+project: data1
+
+# Deployment target configuration
+destination:
+  server: 'https://kubernetes.default.svc'  # Target Kubernetes cluster
+  namespace: gaiax-edc-dev-sd               # Target namespace for deployment
+
+# Source configurations
+sources:
+  # Values repository - contains the application's configuration values
+  - repoURL: 'https://code.europa.eu/simpl/simpl-open/development/data1/charts.git'
+    targetRevision: feature/dev  # Branch or tag to use
+    ref: values                  # Reference name for this source
+
+  # Helm chart repository - contains the application's Helm chart
+  - repoURL: 'https://code.europa.eu/api/v4/projects/1091/packages/helm/stable'
+    targetRevision: 1.2.0        # Chart version to deploy
+    helm:
+      valueFiles:
+        # IMPORTANT: Choose ONE of the following configurations based on deployment type:
+        # Option 1: For provider configuration
+        - $values/edc-connector-adapter/provider/values.yaml  # Provider configuration
+        # Option 2: For consumer configuration
+        # - $values/edc-connector-adapter/consumer/values.yaml  # Consumer configuration
+    chart: edc-connector-adapter # Name of the Helm chart to deploy

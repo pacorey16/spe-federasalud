@@ -1,0 +1,39 @@
+kafka:
+  image:
+    tag: 8.0.1
+    initTag: 3.0.1
+  replicas: 3
+  topic: 
+    replicas: 2
+    insyncreplicas: 1
+    autocreate: true
+  auth:
+    enabled: false
+  serviceAccount:
+    enabled: true
+    name: kafka-sa
+  resources:
+    requests:
+      cpu: 1
+      memory: 2Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  clusterLink: false
+  balancer: false
+
+kraftController:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 1
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 2Gi
+
+hashicorp:
+  service: "http://vaultservice.vaultns.svc.cluster.local:8200"
+  role: "accessrole_name"
+  secretEngine: name
+  secretConfigPath: "{{ .Values.hashicorp.secretEngine }}/{{ .Release.Namespace }}-kafka-credentials"

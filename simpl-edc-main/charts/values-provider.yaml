@@ -1,0 +1,44 @@
+deployment:
+  label: provider
+  callbackAddress: https://edc-provider.dev.simpl-europe.eu
+
+service:
+  apiPort: 19191
+  controlPort: 19192
+  managementPort: 19193
+  protocolPort: 19194
+  publicPort: 19291
+
+ingress:
+  enabled: true
+  host: edc-provider.dev.simpl-europe.eu
+  tlsSecretName: provider-simpl-backend-tls
+  corsAllowOrigin: "*"
+
+# it would be better to move those to vault in the future or use sops encryption
+env:
+  # If tls.url.participantIdSource is provided then env.edcParticipantId value will be ignored. In other words its optional
+  # and not required if tls.url.participantIdSource is provided.
+  edcParticipantId: "provider"
+  edcIdsId: "urn:connector:provider"
+  datasourceurl: jdbc:postgresql://prov-edc-postgres.gaiax-dev-provider.svc.cluster.local:5432/postgres
+
+
+postgresql:
+  username: postgres
+
+tls:
+  url:
+    # Declaration of tls.url.participantIdSource variable is optional. If value will be provided then env.edcParticipantId
+    # will be ignored, and participantId will be fetched from authentication provider using this url. See init container
+    # wait-for-participant-id defined in deployment.yaml for more details about the process.
+    # If value is not provided then env.edcParticipantId will be used and no init container will be added.
+    #participantIdSource: http://authentication-provider.dataprovider01.svc.cluster.local:8080/v1/credentials
+    authenticationprovider: http://authentication-provider.gaiax-edc-dev-sd.svc.cluster.local:8080
+
+# Set to true to enable remote debugging
+javadebug:
+  enabled: false
+  port: 5005
+
+secretConfigPath: "/v1/kv/data/gaia-x/gaiax-dev-provider-simpl-edc"

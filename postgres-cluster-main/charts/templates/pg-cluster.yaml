@@ -1,0 +1,115 @@
+apiVersion: "acid.zalan.do/v1"
+kind: postgresql
+metadata:
+  name: {{ .Values.name }}
+spec:
+  teamId: "acid"
+  volume:
+    size: {{ .Values.volumeSize }}
+  numberOfInstances: {{ .Values.instances }}
+  resources:
+    {{- toYaml $.Values.resources | nindent 4 }}
+  users:
+    # database owner
+    postgres:
+    - superuser
+    - createdb
+    {{- range .Values.authorityList }}
+    {{ . }}_keycloak:
+    - superuser
+    - createdb
+    {{ . }}_ejbca:
+    - superuser
+    - createdb
+    {{ . }}_securityattributesprovider:
+    - superuser
+    - createdb
+    {{ . }}_usersroles:
+    - superuser
+    - createdb
+    {{ . }}_onboarding:
+    - superuser
+    - createdb
+    {{ . }}_identityprovider:
+    - superuser
+    - createdb
+    {{ . }}_authenticationprovider:
+    - superuser
+    - createdb
+    {{ . }}_fcservice:
+    - superuser
+    - createdb
+    {{- end }}
+    {{- range .Values.consumerList }}
+    {{ . }}_keycloak:
+    - superuser
+    - createdb
+    {{ . }}_usersroles:
+    - superuser
+    - createdb
+    {{ . }}_authenticationprovider:
+    - superuser
+    - createdb
+    {{ . }}_edc:
+    - superuser
+    - createdb
+    {{ . }}_contract:
+    - superuser
+    - createdb
+    {{- end }}
+    {{- range .Values.providerList }}
+    {{ . }}_keycloak:
+    - superuser
+    - createdb
+    {{ . }}_usersroles:
+    - superuser
+    - createdb
+    {{ . }}_authenticationprovider:
+    - superuser
+    - createdb
+    {{ . }}_edc:
+    - superuser
+    - createdb
+    {{ . }}_contract:
+    - superuser
+    - createdb
+    {{ . }}_infrabe:
+    - superuser
+    - createdb
+    {{ . }}_dagster:
+    - superuser
+    - createdb
+    {{- end }}
+  #databases: name->owner
+  databases:
+    {{- range .Values.authorityList }}
+    {{ . }}_keycloak: {{ . }}_keycloak
+    {{ . }}_ejbca: {{ . }}_ejbca
+    {{ . }}_securityattributesprovider: {{ . }}_securityattributesprovider
+    {{ . }}_usersroles: {{ . }}_usersroles
+    {{ . }}_onboarding: {{ . }}_onboarding
+    {{ . }}_identityprovider: {{ . }}_identityprovider
+    {{ . }}_authenticationprovider: {{ . }}_authenticationprovider
+    {{ . }}_fcservice: {{ . }}_fcservice
+    {{- end }}
+    {{- range .Values.consumerList }}
+    {{ . }}_keycloak: {{ . }}_keycloak
+    {{ . }}_usersroles: {{ . }}_usersroles
+    {{ . }}_authenticationprovider: {{ . }}_authenticationprovider
+    {{ . }}_edc: {{ . }}_edc
+    {{ . }}_contract: {{ . }}_contract
+    {{- end }}
+    {{- range .Values.providerList }}
+    {{ . }}_keycloak: {{ . }}_keycloak
+    {{ . }}_usersroles: {{ . }}_usersroles
+    {{ . }}_authenticationprovider: {{ . }}_authenticationprovider
+    {{ . }}_edc: {{ . }}_edc
+    {{ . }}_contract: {{ . }}_contract
+    {{ . }}_infrabe: {{ . }}_infrabe
+    {{ . }}_dagster: {{ . }}_dagster
+    {{- end }}
+    postgres: postgres
+  postgresql:
+    version: "17"
+    parameters: 
+      max_connections: "{{ .Values.maxConnections }}"

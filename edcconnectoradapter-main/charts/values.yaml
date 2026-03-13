@@ -1,0 +1,143 @@
+# service port
+servicePort: 8080
+
+# container port
+containerPort: 8080
+
+# specify 'dev' for dev environment or 'int' for integration environment
+domainUrlEnvIdentifier: dev
+
+# domain associated with Dev Cluster (don't modify it)
+domain: dev.simpl-europe.eu
+
+log4j:
+  # location for the log4j configuration file as defined in log4j-configmap.yaml and deployment.yaml
+  config: file:/config/log4j2.xml
+  # config file monitoring interval for hot changes (seconds)
+  monitorInterval: 10
+  level:
+    # logging level for all logs excluding the specific ones
+    root: INFO
+    # logging level for application components only
+    app: INFO
+    # logging level for feign clients only
+    feign: INFO
+
+# comma separated list of servers url to be used by swagger
+openapiConfig:
+  servers: https://edc-connector-adapter.dev.simpl-europe.eu
+
+openTelemetry:
+  # disables the OpenTelemetry SDK (true on local dev)
+  disabled: true
+  # used to identify the environment
+  environment: local-dev
+  # used to identify the service (to append '-provider' or '-consumer' suffix)
+  service: edc-connector-adapter
+  otlpExporter:
+    # collector endpoint for the OTLP exporter
+    endpoint: http://collector.common01.dev.simpl-europe.eu
+    # protocol used by the OTLP exporter (http/protobuf or grpc)
+    protocol: http/protobuf
+  # context propagation type
+  propagators: tracecontext
+
+# resources configuration
+resources:
+  requests:
+    cpu: "0m"
+    memory: "0Gi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+ingress:
+  # enable ingress only for development purpose
+  # on production environment this service must be exposted through the participant tier1 gateway only
+  enabled: false
+  clusterIssuer: dev-prod
+  ingressClass: nginx
+
+image:
+  repository: "${CI_REGISTRY_IMAGE}"
+  pullPolicy: IfNotPresent
+  tag: "${PROJECT_RELEASE_VERSION}"
+
+
+web:
+  mvc:
+    cors:
+      # optional allowed origins for cross calls (list separated by comma or * to allow all origins)
+      # if empty no cross calls are allowed
+      allowedOrigins: ""
+
+    bearerToken:
+      # if true a JWT token must be present as Bearer in any request
+      required: true
+      # optional list (comma separated) of allowed paths (ant matcher expressions) to skip JWT token check (ex: actuator health paths)
+      allowedPaths: "/actuator/health/*"
+
+# application profile (provider or consumer)
+profile: provider
+
+#########################################################################
+# 'provider' profile only
+#########################################################################
+
+edcConnector:
+  # url to the provider EDC connector (internal service)
+  baseUrl: https://edc-provider.dev.simpl-europe.eu
+  # tier2 url to the provider EDC connector service behind the TLS gateway (ending with the route context name)
+  # this will be enriched in the SD json by enrichAndValidate API
+  #tier2BaseUrl: https://tls.participant.provider.dev.simpl-europe.eu/edc
+  tier2BaseUrl: https://edc-provider.dev.simpl-europe.eu/protocol
+  # the participant id to be used as assigner in policies as expected by the EDC connector on contract negotiation.
+  # If edcConnector.participantIdSource is provided then edcConnector.participantId value will be ignored. In other words its optional
+  # and not required if edcConnector.participantIdSource is provided.
+  participantId: provider
+  # Declaration of edcConnector.participantIdSource variable is optional. If value will be provided then edcConnector.participantId
+  # will be ignored, and participantId will be fetched from authentication provider using this url. See init container
+  # wait-for-participant-id defined in deployment.yaml for more details about the process.
+  # If value is not provided then edcConnector.participantId will be used and no init container will be added.
+  #participantIdSource: http://authentication-provider.dataprovider01.svc.cluster.local:8080/v1/credentials
+
+#########################################################################
+# 'consumer' profile only
+#########################################################################
+
+#appJarPath: "/home/simpluser/app.jar"
+
+#edcConnector:
+#  # url to the consumer EDC connector (internal service)
+#  baseUrl: https://edc-consumer.dev.simpl-europe.eu
+#  apiKey: edc-apikey-value
+#  deprovisioning:
+#    # use false to disable or true to enable deprovisionig requests to EDC connector
+#    enabled: false
+
+#kafka:
+#  # urls list to KAFKA bootstrap servers (comma separated if more than one)
+#  bootstrapServers: localhost:9092
+
+#  # consumers group id
+#  consumer:
+#    groupId: contract_consumption
+#  topics:
+#     # topic used for checking the transfer status
+#     transferStatus: contract_consumption.transfer_status
+#     # topic used for transfer deprovisioning after transfer completion
+#     transferDeprovisioning: contract_consumption.transfer_deprovisioning
+
+#  # can be one of: SASL_PLAINTEXT (if blank no auth enabled)
+#  auth:
+#    type: SASL_PLAINTEXT
+#  # flag to stop application if kafka broker is not available
+#  fatalIfBrokerNotAvailable: true
+
+
+#vault:
+#  secretEngine: "kv/data-1"
+#  # Dev path: kv/data-1/gaiax-edc-dev-sd-contract-consumption-be
+#  secretPath: "{{ .Values.vault.secretEngine }}/{{ .Release.Namespace }}-{{ .Release.Name }}"
+#  role: "data1"
+#  service: "https://vault.tools.simpl-europe.eu/"

@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-service
+spec:
+  selector:
+    app: {{ .Values.deployment.label }}
+  ports:
+    - name: consumer-api
+      protocol: TCP
+      port: {{ .Values.service.apiPort }}
+      targetPort: {{ .Values.service.apiPort }}
+    - name: consumer-protocol
+      protocol: TCP
+      port: {{ .Values.service.protocolPort }}
+      targetPort: {{ .Values.service.protocolPort }}
+    - name: consumer-management
+      protocol: TCP
+      port: {{ .Values.service.managementPort }}
+      targetPort: {{ .Values.service.managementPort }}
+    - name: consumer-control
+      protocol: TCP
+      port: {{ .Values.service.controlPort }}
+      targetPort: {{ .Values.service.controlPort }}
+    - name: consumer-public
+      protocol: TCP
+      port: {{ .Values.service.publicPort }}
+      targetPort: {{ .Values.service.publicPort }}
+

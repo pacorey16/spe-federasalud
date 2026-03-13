@@ -1,0 +1,203 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      {{- if eq .Values.profile "consumer" }}
+      annotations:
+        vault.security.banzaicloud.io/vault-addr: {{ .Values.vault.service }}
+        vault.security.banzaicloud.io/vault-role: {{ .Values.vault.role }}
+      {{- end }}
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      # fixing fortify issue 'Kubernetes Misconfiguration: Service Account Token Automounted'
+      automountServiceAccountToken: false
+      
+      # fixing fortify issue 'Kubernetes Misconfiguration: Improper Deployment Access Control'
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+          
+      serviceAccountName: {{ if .Values.serviceAccount }}{{ .Values.serviceAccount.name | default .Release.Name }}{{ else }}{{ .Release.Name }}{{ end }}
+      
+      volumes:
+        - name: config-volume
+          emptyDir: { }
+        - name: {{ .Release.Name }}-configmap
+          configMap:
+            name: {{ .Release.Name }}-configmap
+        
+        # alternative method to mount the serviceAccountToken when automountServiceAccountToken=false 
+        - name: custom-token
+          projected:
+            defaultMode: 420
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 600
+                audience: openbao
+            - configMap:
+                name: kube-root-ca.crt
+                items:
+                - key: ca.crt
+                  path: ca.crt
+            - downwardAPI:
+                items:
+                - fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.namespace
+                  path: namespace
+      
+      {{- if .Values.edcConnector.participantIdSource }}
+      initContainers:
+        - name: wait-for-participant-id
+          volumeMounts:
+            - name: config-volume
+              mountPath: /conf
+          image: curlimages/curl:latest
+          command: [ 'sh', '-c' ]
+          args:
+            - |
+              while true; do
+                echo "Checking if participantId is available..."
+                response=$(curl -s -w "\n%{http_code}" {{ .Values.edcConnector.participantIdSource }})
+                status_code=$(echo "$response" | tail -n1)
+                response_body=$(echo "$response" | sed '$d')
+
+                if [ "$status_code" -eq 200 ]; then
+                  # Extract participantId using grep and sed
+                  participant_id=$(echo "$response_body" | grep -o '"participantId":"[^"]*' | sed 's/"participantId":"//')
+
+                  if [ -n "$participant_id" ] && [ "$participant_id" != "null" ]; then
+                    echo "$participant_id" > /conf/participant-id
+                    echo "Success: Retrieved participantId: $participant_id"
+                    break
+                  else
+                    echo "Error: participantId not found in response"
+                  fi
+                else
+                  echo "Expected 200 but got ${status_code}. Retrying in 60 seconds..."
+                fi
+                sleep 60
+              done
+              echo "Dependency check passed, starting main container..."
+      {{- end }}
+      
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          resources: {{ toYaml .Values.resources | nindent 12 }}
+          ports:
+            - containerPort: {{ .Values.containerPort }}
+          
+          {{- if .Values.edcConnector.participantIdSource }}
+          command: [ "/bin/bash" ]
+          args: [ "-c", "export EDC_CONNECTOR_PARTICIPANT_ID=$(cat /conf/participant-id) && java -jar /home/simpluser/app.jar" ]
+          {{- end }}
+          
+          volumeMounts:
+            - name: {{ .Release.Name }}-configmap
+              mountPath: /config
+            - name: config-volume
+              mountPath: /conf
+            - name: custom-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                
+          env:
+            - name: EDC_CONNECTOR_BASE_URL
+              value: {{ .Values.edcConnector.baseUrl | quote }}
+            - name: EDC_CONNECTOR_DEPROVISIONING_ENABLED
+              value: {{ ((.Values.edcConnector).deprovisioning).enabled | default false | quote }}
+            
+            {{- if eq .Values.profile "provider" }}
+            - name: EDC_CONNECTOR_TIER2_BASE_URL
+              value: {{ .Values.edcConnector.tier2BaseUrl | quote }}
+            # by providing this url we want to fetch EDC_CONNECTOR_PARTICIPANT_ID from authentication provider -> see init container wait-for-participant-id.
+            # if edcConnector.participantIdSource is not provided then the edcConnector.participantId value from values.yaml is taken
+            {{- if not .Values.edcConnector.participantIdSource }}
+            - name: EDC_CONNECTOR_PARTICIPANT_ID
+              value: {{ .Values.edcConnector.participantId | quote }}
+            {{- end }}
+            {{- end }}
+              
+            {{- if eq .Values.profile "consumer" }}
+            - name: EDC_CONNECTOR_API_KEY_VALUE
+              value: {{ .Values.edcConnector.apiKey | quote }}  
+            - name: KAFKA_TRANSFER_PROCESS_TOPIC
+              value: {{ .Values.kafka.topics.transferProcess | quote }}
+            - name: KAFKA_AUTH_TYPE
+              value: {{ .Values.kafka.auth.type | quote }}
+            - name: KAFKA_FATAL_IF_BROKER_NOT_AVAILABLE
+              value: {{ .Values.kafka.fatalIfBrokerNotAvailable | quote }}
+            - name: KAFKA_AUTH_SASL_USERNAME
+              value: vault:{{ .Values.vault.secretEngine }}/data/{{ .Values.cluster.namespace }}-edc-connector-adapter#KAFKA_AUTH_SASL_USERNAME
+            - name: KAFKA_AUTH_SASL_PASSWORD
+              value: vault:{{ .Values.vault.secretEngine }}/data/{{ .Values.cluster.namespace }}-edc-connector-adapter#KAFKA_AUTH_SASL_PASSWORD
+            {{- end }}
+            
+            - name: LOGGING_CONFIG
+              value: {{ .Values.log4j.config | quote }}
+              
+            - name: OPENAPI_CONFIG_SERVERS
+              value: {{ .Values.openapiConfig.servers | quote }}  
+              
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.openTelemetry.otlpExporter.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.openTelemetry.otlpExporter.protocol | quote }}
+            - name: OTEL_PROPAGATORS
+              value: {{ .Values.openTelemetry.propagators | quote }}
+            - name: OTEL_RESOURCE_ATTRIBUTES_DEPLOYMENT_ENVIRONMENT
+              value: {{ .Values.openTelemetry.environment | quote }}
+            - name: OTEL_RESOURCE_ATTRIBUTES_SERVICE_NAME
+              value: {{ .Values.openTelemetry.service | quote }}
+            - name: OTEL_SDK_DISABLED
+              value: {{ .Values.openTelemetry.disabled | quote }}  
+            
+            {{- if eq .Values.profile "consumer" }}
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.kafka.bootstrapServers | quote }}
+            - name: SPRING_KAFKA_GROUP_ID
+              value: {{ .Values.kafka.consumer.groupId | quote }}
+            {{- end }}
+            
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.profile | quote }}            
+            
+            - name: WEB_MVC_CORS_ALLOWED_ORIGINS
+              value: {{ .Values.web.mvc.cors.allowedOrigins | quote }}
+          
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ .Values.containerPort }}
+              httpHeaders:
+                - name: Accept
+                  value: application/json
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.containerPort }}
+              httpHeaders:
+                - name: Accept
+                  value: application/json
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+            

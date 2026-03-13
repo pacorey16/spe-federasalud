@@ -1,0 +1,17 @@
+apiVersion: platform.confluent.io/v1beta1
+kind: KRaftController
+metadata:
+  name: kraftcontroller
+spec:
+  replicas: {{ .Values.kraftController.replicas }}
+  dataVolumeCapacity: 10G
+  image:
+    application: docker.io/confluentinc/cp-server:{{ .Values.kafka.image.tag }}
+    init: confluentinc/confluent-init-container:{{ .Values.kafka.image.initTag }}
+  podTemplate:
+    resources: {{- toYaml .Values.kraftController.resources | nindent 6 }}
+  configOverrides:
+    jvm:
+      - "-Xmx4g"
+      - "-XX:+UseContainerSupport"
+      - "-XX:MaxRAMPercentage=50.0"

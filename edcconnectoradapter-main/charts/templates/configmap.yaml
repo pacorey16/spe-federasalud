@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-configmap
+data:
+  log4j2.xml: |
+    <Configuration status="WARN" monitorInterval="{{ .Values.log4j.monitorInterval }}">
+   
+    <CustomLevels>
+        <CustomLevel name="BUSINESS" intLevel="250"/>
+    </CustomLevels>
+   
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <JsonTemplateLayout eventTemplateUri="classpath:log4j2-template.json"/>
+        </Console>
+    </Appenders>
+   
+    <Loggers>
+        <Root level="{{ .Values.log4j.level.root }}" includeLocation="true">
+            <AppenderRef ref="Console"/>
+        </Root>
+        <Logger name="eu.europa" level="{{ .Values.log4j.level.app }}" includeLocation="true" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="feign" level="{{ .Values.log4j.level.feign }}" includeLocation="true" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+    </Loggers>
+   
+    </Configuration>

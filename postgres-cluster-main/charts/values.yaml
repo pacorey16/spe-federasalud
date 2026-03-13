@@ -1,0 +1,17 @@
+name: pg-cluster
+volumeSize: 20Gi
+instances: 3
+maxConnections: 500
+resources:
+  requests:
+    cpu: 10m
+    memory: 100Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+authorityList: {}
+
+consumerList: {}
+
+providerList: {}

@@ -1,0 +1,64 @@
+services:
+  consumer-db:
+    image: postgres:latest
+    container_name: consumer-db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${EDC_DATASOURCE_DEFAULT_USER}
+      POSTGRES_PASSWORD: ${EDC_DATASOURCE_DEFAULT_PASSWORD}
+    healthcheck:
+      test: pg_isready -d postgres -U postgres
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+  provider-db:
+    image: postgres:latest
+    container_name: provider-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${EDC_DATASOURCE_DEFAULT_USER}
+      POSTGRES_PASSWORD: ${EDC_DATASOURCE_DEFAULT_PASSWORD}
+    healthcheck:
+      test: pg_isready -d postgres -U postgres
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+  provider-contract-manager-mock:
+    image: code.europa.eu:4567/simpl/simpl-open/development/gaia-x-edc/simpl-contract-negotiation-mockup:1.0.0
+    container_name: provContractManagerMock
+    ports:
+      - "8081:8080"
+  consumer-contract-manager-mock:
+    image: code.europa.eu:4567/simpl/simpl-open/development/gaia-x-edc/simpl-contract-negotiation-mockup:1.0.0
+    container_name: consContractManagerMock
+    ports:
+      - "8080:8080"
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./minio-data:/data
+    command: server /data --console-address ":9001"
+
+  init-mc:
+    image: alpine:latest
+    container_name: minio-init-mc
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "/init-minio.sh"]
+    volumes:
+      - ./init-minio.sh:/init-minio.sh:ro
+      - ./example-s3.txt:/example-s3.txt:ro
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin

@@ -1,0 +1,72 @@
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+spec:
+  replicas: {{ .Values.kafka.replicas }}
+  image:
+    application: confluentinc/cp-server:{{ .Values.kafka.image.tag }}
+    init: confluentinc/confluent-init-container:{{ .Values.kafka.image.initTag }}
+  dataVolumeCapacity: 10Gi
+  dependencies:
+    kRaftController:
+      clusterRef:
+        name: kraftcontroller
+  podTemplate:
+    annotations:
+      {{- if .Values.kafka.auth.enabled }}
+      vault.hashicorp.com/agent-inject: "true"
+      vault.hashicorp.com/role: {{ .Values.hashicorp.role }}
+      {{- if and (hasKey .Values "hashicorp") (hasKey .Values.hashicorp "service") }}
+      vault.hashicorp.com/service: {{ .Values.hashicorp.service }}
+      {{- end }}
+      vault.hashicorp.com/agent-inject-secret-plain-jaas.conf: "{{ tpl .Values.hashicorp.secretConfigPath . }}"
+      vault.hashicorp.com/agent-inject-template-plain-jaas.conf: |
+        {{- $secretPath := tpl .Values.hashicorp.secretConfigPath . -}}
+        {{- $template := printf (printf "{{`{{ with secret \"%s\" }}\n" $secretPath) -}}
+        {{- $template = printf "%ssasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required" $template -}}
+        {{- $template = printf "%s{{ range $k, $v := .Data.data }}" $template -}}
+        {{- $template = printf "%s user_{{ $k }}=\"{{ $v }}\"" $template -}}
+        {{- $template = printf "%s{{ end }};" $template -}}
+        {{- $template = printf "%s{{ end }}`}}" $template -}}
+        {{- tpl $template . | nindent 10 }}
+      {{- end }}
+    serviceAccountName: {{ .Values.kafka.serviceAccount.name }}
+    resources: {{- toYaml .Values.kafka.resources | nindent 6 }}
+  {{- if .Values.kafka.auth.enabled }}
+  listeners:
+    external:
+      authentication:
+        type: plain
+        jaasConfigPassThrough:
+          directoryPathInContainer: /vault/secrets
+  {{- end }}
+  configOverrides:
+    jvm:
+      - "-Xmx4g"
+      - "-XX:+UseContainerSupport"
+      - "-XX:MaxRAMPercentage=50.0"
+    server:
+      - default.replication.factor={{ .Values.kafka.topic.replicas }}
+      - min.insync.replicas={{ .Values.kafka.topic.insyncreplicas }}
+      - config.storage.replication.factor={{ .Values.kafka.topic.replicas }}
+      - offset.storage.replication.factor={{ .Values.kafka.topic.replicas }}
+      - offsets.topic.replication.factor={{ .Values.kafka.topic.replicas }}
+      - status.storage.replication.factor={{ .Values.kafka.topic.replicas }}
+      - confluent.balancer.topic.replication.factor={{ .Values.kafka.topic.replicas }}
+      - confluent.security.event.logger.exporter.kafka.topic.replicas={{ .Values.kafka.topic.replicas }}
+      - confluent.license.topic.replication.factor={{ .Values.kafka.topic.replicas }}
+      - auto.create.topics.enable={{ .Values.kafka.topic.autocreate }}
+      - confluent.cluster.link.enable={{ .Values.kafka.clusterLink }}
+      - confluent.balancer.enable={{ .Values.kafka.balancer }}
+---
+{{- if .Values.kafka.serviceAccount.enabled -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.kafka.serviceAccount.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}
+{{- end }}

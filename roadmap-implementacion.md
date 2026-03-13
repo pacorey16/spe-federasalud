@@ -43,10 +43,11 @@ spe-connector     → desplegado en Minikube (Kafka consumer + K8s sandbox)
 
 | Servicio | Motivo |
 |---|---|
-| Keycloak | `SimplIdentityService` genera tokens JWT mockeados con roles base64 |
+| Keycloak | `SimplIdentityService` genera tokens mockeados cuando `client.okhttp.type=OkHttpClient`; los roles se inyectan vía `mocked.agent.identity.attributes` (base64) |
 | HashiCorp Vault | Secretos en `config.properties` directamente (suficiente para PoC) |
 | tenant-services | Los participantes se configuran manualmente en `config.properties` |
-| contract-manager | EDC gestiona contratos internamente; el callback URL es opcional (`simpl.contract.manager.url`) |
+| contract-manager | Deshabilitado con `contractmanager.extension.enabled=false`; EDC gestiona contratos internamente sin callback externo |
+| edc-connector-adapter | Spring Boot adapter (`edcconnectoradapter-main`) que expone REST/Kafka encima de EDC — no necesario para el PoC; usamos la Management API de EDC directamente |
 | ELK Stack | Logs de consola y stdout de Docker suficientes para depuración |
 | TLS Gateway / Smart Gateway | Acceso directo por puerto localhost, sin TLS en local |
 | EJBCA | Certificados autofirmados o sin TLS en local |
@@ -105,18 +106,36 @@ version: '3.8'
 
 services:
 
-  postgres:
+  # Instancia PostgreSQL para el proveedor (hospital)
+  provider-db:
     image: postgres:15-alpine
-    container_name: simpl-postgres
+    container_name: simpl-provider-db
     environment:
       POSTGRES_USER: edc
       POSTGRES_PASSWORD: edc_password
-      POSTGRES_MULTIPLE_DATABASES: edc_provider,edc_consumer
+      POSTGRES_DB: postgres
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./common/postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init.sh
+      - provider_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edc"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Instancia PostgreSQL para el consumidor (investigador) — puerto 5433
+  consumer-db:
+    image: postgres:15-alpine
+    container_name: simpl-consumer-db
+    environment:
+      POSTGRES_USER: edc
+      POSTGRES_PASSWORD: edc_password
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - consumer_db_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U edc"]
       interval: 5s
@@ -129,7 +148,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_PASSWORD: minioadmin
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -142,7 +161,8 @@ services:
       retries: 3
 
 volumes:
-  postgres_data:
+  provider_db_data:
+  consumer_db_data:
   minio_data:
 ```
 
@@ -151,13 +171,9 @@ volumes:
 cd infrastructure
 docker compose -f docker-compose-common.yml up -d
 
-# Crear bases de datos separadas para provider y consumer
-docker exec simpl-postgres psql -U edc -c "CREATE DATABASE edc_provider;"
-docker exec simpl-postgres psql -U edc -c "CREATE DATABASE edc_consumer;"
-
-# Crear buckets en MinIO
+# Crear buckets en MinIO (esperar a que MinIO esté healthy)
 docker run --rm --network host minio/mc \
-  alias set local http://localhost:9000 minioadmin minioadmin123
+  alias set local http://localhost:9000 minioadmin minioadmin
 
 docker run --rm --network host minio/mc mb local/provider-data
 docker run --rm --network host minio/mc mb local/consumer-results
@@ -168,8 +184,9 @@ docker compose -f docker-compose-common.yml ps
 
 **Criterio de validación de Fase 0:**
 - `docker compose ps` → todos `healthy`
-- `psql -h localhost -U edc -d edc_provider -c "\l"` → lista las dos bases de datos
-- `http://localhost:9001` → consola MinIO accesible (minioadmin / minioadmin123)
+- `psql -h localhost -U edc -d postgres -c "\l"` → responde desde `simpl-provider-db`
+- `psql -h localhost -p 5433 -U edc -d postgres -c "\l"` → responde desde `simpl-consumer-db`
+- `http://localhost:9001` → consola MinIO accesible (minioadmin / minioadmin)
 - `minikube status --profile simpl-local` → `Running` (si se va a usar Enfoque B)
 
 ---
@@ -190,7 +207,7 @@ ls -lh target/basic-connector.jar
 
 ### 1.2 Entender el Mock de Identidad (sin Keycloak)
 
-El proyecto usa `SimplIdentityService` que genera tokens de identidad a partir de un valor base64 hardcodeado en configuración. Los roles disponibles son:
+El proyecto usa `SimplIdentityService` (clase `IamExtension`) que genera tokens de identidad a partir de un JSON base64 hardcodeado en configuración. Los roles disponibles en el JSON son:
 
 ```
 CONSUMER      → investigador que consulta catálogos y negocia contratos
@@ -199,13 +216,18 @@ SD_PUBLISHER  → publica Self-Descriptions en el catálogo
 SD_CONSUMER   → consume Self-Descriptions
 ```
 
-No se necesita ningún servidor de autenticación externo. La configuración en `config.properties` simplemente activa este mock:
+El mock se activa con **dos propiedades obligatorias** en `config.properties`:
 
 ```properties
-# Identidad mockeada — no requiere Keycloak
-edc.iam.sts.oauth.token.url=mock
-edc.iam.issuer.id=did:web:provider
+# Activa el modo mock: deshabilita el gateway de autenticación externo
+client.okhttp.type=OkHttpClient
+
+# JSON base64 con los roles del participante (misma value para provider y consumer en el PoC)
+# Decodificado contiene: [{"code":"CONSUMER"},{"code":"RESEARCHER"},{"code":"SD_PUBLISHER"},{"code":"SD_CONSUMER"}]
+mocked.agent.identity.attributes=WwogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkyZGUyNy1kZGQwLTcwYjAtOTQ3Zi04ZGE4NGUwNWNlNDYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6MDcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDoxOC4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTJkZTI4LWE4NTgtN2M3YS05NmE3LWRhYjQ2YzdiMmRiMSIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJSRVNFQVJDSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJuYW1lIjogIlJFU0VBUkNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6NTkuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDo1OS4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTM4YzM4LTg0OGEtNzE1YS04MTgzLTE0ZGEyMTExMDgyMiIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJTRF9QVUJMSVNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiU0RfUFVCTElTSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICIiLAogICAgICAgICAgICAgICAgICAgICAgImFzc2lnbmFibGVUb1JvbGVzIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJlbmFibGVkIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJjcmVhdGlvblRpbWVzdGFtcCI6ICIyMDI0LTEyLTAzVDExOjEyOjE0LjAwMCswMDowMCIsCiAgICAgICAgICAgICAgICAgICAgICAidXBkYXRlVGltZXN0YW1wIjogIjIwMjQtMTItMDNUMTE6MTI6MjUuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1c2VkIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJyaWdodCI6IHRydWUKICAgICAgICAgICAgICAgICAgICB9LAogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkzOGMzOC1kY2JkLTdhMGMtYjE2MC04Yjk1NWIzODUwODYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiU0RfQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiU0RfQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTItMDNUMTE6MTI6MzcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMi0wM1QxMToxMjozNy4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0KXQ==
 ```
+
+> **Nota:** El mismo valor base64 se usa en ambos conectores (provider y consumer) para el PoC. Representa los 4 roles habilitados. Extraído de `simpl-edc-main/local/provider-config.properties`.
 
 ### 1.3 Configuración del Proveedor (Hospital)
 
@@ -215,6 +237,7 @@ Archivo: `enfoque-a-split-architecture/edc-provider/control-plane/config/provide
 # Identidad
 edc.participant.id=simpl-hospital-provider
 edc.connector.name=Hospital Provider Connector
+edc.ids.id=urn:connector:simpl-hospital-provider
 
 # Puertos
 web.http.port=19191
@@ -230,22 +253,36 @@ web.http.control.path=/control
 
 # Protocolo DSP
 edc.dsp.callback.address=http://localhost:19194/protocol
+edc.dataplane.api.public.baseurl=http://localhost:19291/public
 
 # Base de datos (sin Vault — directo en properties para local)
-edc.datasource.default.url=jdbc:postgresql://localhost:5432/edc_provider
+# La instancia provider-db escucha en localhost:5432
+edc.datasource.default.url=jdbc:postgresql://localhost:5432/postgres
 edc.datasource.default.user=edc
 edc.datasource.default.password=edc_password
+edc.datasource.policy.url=jdbc:postgresql://localhost:5432/postgres
+edc.datasource.policy.user=edc
+edc.datasource.policy.password=edc_password
+edc.sql.schema.autocreate=true
 
 # Autenticación API (X-Api-Key — sin Vault)
 edc.api.auth.key=provider-local-api-key
 
-# MinIO S3
-edc.minio.endpoint=http://localhost:9000
-edc.minio.access.key=minioadmin
-edc.minio.secret.key=minioadmin123
+# MinIO S3 — extensión Gaia-X GXFS (fr.gxfs.s3.*)
+fr.gxfs.s3.endpoint=http://localhost:9000
+fr.gxfs.s3.access.key=minioadmin
+fr.gxfs.s3.secret.key=minioadmin
 
-# Contract Manager — NO configurado: EDC gestiona contratos internamente
-# simpl.contract.manager.url=   <-- comentado, no usar en local
+# Identidad mockeada — activa SimplIdentityService sin Keycloak
+client.okhttp.type=OkHttpClient
+mocked.agent.identity.attributes=WwogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkyZGUyNy1kZGQwLTcwYjAtOTQ3Zi04ZGE4NGUwNWNlNDYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6MDcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDoxOC4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTJkZTI4LWE4NTgtN2M3YS05NmE3LWRhYjQ2YzdiMmRiMSIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJSRVNFQVJDSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJuYW1lIjogIlJFU0VBUkNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6NTkuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDo1OS4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTM4YzM4LTg0OGEtNzE1YS04MTgzLTE0ZGEyMTExMDgyMiIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJTRF9QVUJMSVNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiU0RfUFVCTElTSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICIiLAogICAgICAgICAgICAgICAgICAgICAgImFzc2lnbmFibGVUb1JvbGVzIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJlbmFibGVkIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJjcmVhdGlvblRpbWVzdGFtcCI6ICIyMDI0LTEyLTAzVDExOjEyOjE0LjAwMCswMDowMCIsCiAgICAgICAgICAgICAgICAgICAgICAidXBkYXRlVGltZXN0YW1wIjogIjIwMjQtMTItMDNUMTE6MTI6MjUuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1c2VkIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJyaWdodCI6IHRydWUKICAgICAgICAgICAgICAgICAgICB9LAogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkzOGMzOC1kY2JkLTdhMGMtYjE2MC04Yjk1NWIzODUwODYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiU0RfQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiU0RfQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTItMDNUMTE6MTI6MzcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMi0wM1QxMToxMjozNy4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0KXQ==
+
+# Contract Manager — deshabilitado para local
+contractmanager.extension.enabled=false
+
+# Data Plane embebido: false para Enfoque A (el Data Plane es un proceso separado)
+# true para uso básico o Enfoque B
+edc.dataplane.embedded.enabled=false
 ```
 
 ### 1.4 Configuración del Consumidor (Investigador)
@@ -255,6 +292,7 @@ Archivo: `enfoque-a-split-architecture/edc-consumer/control-plane/config/consume
 ```properties
 edc.participant.id=simpl-researcher-consumer
 edc.connector.name=Researcher Consumer Connector
+edc.ids.id=urn:connector:simpl-researcher-consumer
 
 web.http.port=29191
 web.http.path=/api
@@ -268,16 +306,30 @@ web.http.control.port=29192
 web.http.control.path=/control
 
 edc.dsp.callback.address=http://localhost:29194/protocol
+edc.dataplane.api.public.baseurl=http://localhost:29291/public
 
-edc.datasource.default.url=jdbc:postgresql://localhost:5432/edc_consumer
+# La instancia consumer-db escucha en localhost:5433 (mapeada desde el 5432 del contenedor)
+edc.datasource.default.url=jdbc:postgresql://localhost:5433/postgres
 edc.datasource.default.user=edc
 edc.datasource.default.password=edc_password
+edc.sql.schema.autocreate=true
 
 edc.api.auth.key=consumer-local-api-key
 
-edc.minio.endpoint=http://localhost:9000
-edc.minio.access.key=minioadmin
-edc.minio.secret.key=minioadmin123
+# MinIO S3 — extensión Gaia-X GXFS (fr.gxfs.s3.*)
+fr.gxfs.s3.endpoint=http://localhost:9000
+fr.gxfs.s3.access.key=minioadmin
+fr.gxfs.s3.secret.key=minioadmin
+
+# Identidad mockeada — activa SimplIdentityService sin Keycloak
+client.okhttp.type=OkHttpClient
+mocked.agent.identity.attributes=WwogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkyZGUyNy1kZGQwLTcwYjAtOTQ3Zi04ZGE4NGUwNWNlNDYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6MDcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDoxOC4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTJkZTI4LWE4NTgtN2M3YS05NmE3LWRhYjQ2YzdiMmRiMSIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJSRVNFQVJDSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJuYW1lIjogIlJFU0VBUkNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6NTkuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDo1OS4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTM4YzM4LTg0OGEtNzE1YS04MTgzLTE0ZGEyMTExMDgyMiIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJTRF9QVUJMSVNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiU0RfUFVCTElTSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICIiLAogICAgICAgICAgICAgICAgICAgICAgImFzc2lnbmFibGVUb1JvbGVzIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJlbmFibGVkIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJjcmVhdGlvblRpbWVzdGFtcCI6ICIyMDI0LTEyLTAzVDExOjEyOjE0LjAwMCswMDowMCIsCiAgICAgICAgICAgICAgICAgICAgICAidXBkYXRlVGltZXN0YW1wIjogIjIwMjQtMTItMDNUMTE6MTI6MjUuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1c2VkIjogdHJ1ZSwKICAgICAgICAgICAgICAgICAgICAgICJyaWdodCI6IHRydWUKICAgICAgICAgICAgICAgICAgICB9LAogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkzOGMzOC1kY2JkLTdhMGMtYjE2MC04Yjk1NWIzODUwODYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiU0RfQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiU0RfQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTItMDNUMTE6MTI6MzcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMi0wM1QxMToxMjozNy4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0KXQ==
+
+# Contract Manager — deshabilitado para local
+contractmanager.extension.enabled=false
+
+# Data Plane embebido: true para el consumidor (no necesita Data Plane separado)
+edc.dataplane.embedded.enabled=true
 ```
 
 ### 1.5 Arrancar Ambos Conectores y Crear Activos/Políticas
@@ -318,7 +370,7 @@ curl -s -X POST "http://localhost:19193/management/v3/assets" \
       "keyName": "cardio/dataset-001.json",
       "endpointOverride": "http://localhost:9000",
       "accessKeyId": "minioadmin",
-      "secretAccessKey": "minioadmin123"
+      "secretAccessKey": "minioadmin"
     }
   }' | jq .
 
@@ -378,6 +430,7 @@ Archivo: `enfoque-a-split-architecture/edc-provider/data-plane/config/dataplane-
 ```properties
 edc.participant.id=simpl-hospital-dataplane
 edc.connector.name=Hospital Data Plane
+edc.ids.id=urn:connector:simpl-hospital-dataplane
 
 # El Data Plane solo expone los puertos de datos y control
 web.http.port=39192
@@ -387,13 +440,20 @@ web.http.public.path=/public
 web.http.control.port=39193
 web.http.control.path=/control
 
-# URL de validación de tokens — apunta al Control Plane
+# URL de validación de tokens — apunta al Control Plane (puerto control 19192)
 edc.dataplane.token.validation.endpoint=http://localhost:19192/control/token
 
-# S3
-edc.s3.endpoint=http://localhost:9000
-edc.s3.access.key=minioadmin
-edc.s3.secret.key=minioadmin123
+# MinIO S3 — extensión Gaia-X GXFS (fr.gxfs.s3.*)
+fr.gxfs.s3.endpoint=http://localhost:9000
+fr.gxfs.s3.access.key=minioadmin
+fr.gxfs.s3.secret.key=minioadmin
+
+# Identidad mockeada
+client.okhttp.type=OkHttpClient
+mocked.agent.identity.attributes=WwogICAgICAgICAgICAgICAgICAgIHsKICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICIwMTkyZGUyNy1kZGQwLTcwYjAtOTQ3Zi04ZGE4NGUwNWNlNDYiLAogICAgICAgICAgICAgICAgICAgICAgImNvZGUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiAiQ09OU1VNRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6MDcuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDoxOC4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0sCiAgICAgICAgICAgICAgICAgICAgewogICAgICAgICAgICAgICAgICAgICAgImlkIjogIjAxOTJkZTI4LWE4NTgtN2M3YS05NmE3LWRhYjQ2YzdiMmRiMSIsCiAgICAgICAgICAgICAgICAgICAgICAiY29kZSI6ICJSRVNFQVJDSEVSIiwKICAgICAgICAgICAgICAgICAgICAgICJuYW1lIjogIlJFU0VBUkNIRVIiLAogICAgICAgICAgICAgICAgICAgICAgImRlc2NyaXB0aW9uIjogIiIsCiAgICAgICAgICAgICAgICAgICAgICAiYXNzaWduYWJsZVRvUm9sZXMiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImVuYWJsZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgImNyZWF0aW9uVGltZXN0YW1wIjogIjIwMjQtMTAtMzBUMTY6MDA6NTkuMDAwKzAwOjAwIiwKICAgICAgICAgICAgICAgICAgICAgICJ1cGRhdGVUaW1lc3RhbXAiOiAiMjAyNC0xMC0zMFQxNjowMDo1OS4wMDArMDA6MDAiLAogICAgICAgICAgICAgICAgICAgICAgInVzZWQiOiB0cnVlLAogICAgICAgICAgICAgICAgICAgICAgInJpZ2h0IjogdHJ1ZQogICAgICAgICAgICAgICAgICAgIH0KXQ==
+
+contractmanager.extension.enabled=false
+edc.dataplane.embedded.enabled=true
 ```
 
 ### 2.2 Configuración NGINX con Allowlist de IPs
@@ -565,7 +625,7 @@ curl -s -X POST "$CONSUMER/v3/transferprocesses" \
       \"keyName\":\"cardio-dataset-001.json\",
       \"endpointOverride\":\"http://localhost:9000\",
       \"accessKeyId\":\"minioadmin\",
-      \"secretAccessKey\":\"minioadmin123\"
+      \"secretAccessKey\":\"minioadmin\"
     }
   }" | jq .
 
@@ -661,8 +721,10 @@ docker exec simpl-kafka kafka-topics \
 
 ### 3.2 Compilar el SPE-Connector
 
+> **Nota sobre la estructura del proyecto:** El repositorio raíz (`spe-federasalud/`) ES el proyecto Maven del SPE-Connector — no hay que hacer `cd` a un subdirectorio. Los comandos se ejecutan desde la raíz del repo.
+
 ```bash
-cd spe-federasalud
+# Desde la raíz del repositorio spe-federasalud/
 mvn clean package -DskipTests
 
 ls -lh spe-launcher/target/spe-launcher-1.0.0-SNAPSHOT.jar
@@ -674,8 +736,8 @@ ls -lh spe-launcher/target/spe-launcher-1.0.0-SNAPSHOT.jar
 # Apuntar Docker al daemon de Minikube
 eval $(minikube docker-env --profile simpl-local)
 
-# Construir imagen dentro del contexto de Minikube
-cd spe-federasalud
+# Construir imagen desde la raíz del repositorio spe-federasalud/
+# (el Dockerfile está en la raíz del proyecto)
 docker build -t simpl/spe-connector:latest .
 
 # Verificar que la imagen está disponible en Minikube
@@ -753,7 +815,7 @@ echo "{
     \"endpoint\": \"http://host.minikube.internal:9000\",
     \"bucket\": \"consumer-results\",
     \"access_key\": \"minioadmin\",
-    \"secret_key\": \"minioadmin123\"
+    \"secret_key\": \"minioadmin\"
   }
 }" | docker exec -i simpl-kafka kafka-console-producer \
   --bootstrap-server localhost:9092 \

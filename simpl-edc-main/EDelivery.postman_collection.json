@@ -1,0 +1,345 @@
+{
+  "info": {
+    "_postman_id": "3ca9ab74-1f76-417f-8b5d-1bfa1865a9b1",
+    "name": "EDC_to_EDelivery",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "30090817"
+  },
+  "item": [
+    {
+      "name": "EDelivery",
+      "item": [
+        {
+          "name": "Create Asset",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@id\": \"eDelivery-asset1\",\n  \"properties\": {\n    \"name\": \"Example EDelivery\",\n    \"description\": \"Test EDelivery transfer\",\n    \"contenttype\": \"text/plain\"\n  },\n  \"dataAddress\": {\n    \"type\": \"eDelivery\",\n    \"edeliveryTriggerAPI\": \"http://localhost:8084/simpl-edelivery-trigger\",\n    \"appDataIdentifier\": \"simpl-edelivery-poc-01\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:19193/management/v3/assets",
+              "host": [
+                "localhost"
+              ],
+              "port": "19193",
+              "path": [
+                "management",
+                "v3",
+                "assets"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Access Policy",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@id\": \"eDelivery-access-policy1\",\n  \"policy\": {\n    \"@context\": \"http://www.w3.org/ns/odrl.jsonld\",\n    \"@type\": \"Set\",\n    \"permission\": [\n      {\n        \"action\": \"use\"\n      }\n    ],\n    \"prohibition\": [],\n    \"obligation\": []\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:19193/management/v3/policydefinitions",
+              "host": [
+                "localhost"
+              ],
+              "port": "19193",
+              "path": [
+                "management",
+                "v3",
+                "policydefinitions"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Usage Policy",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n\t\"@context\": {\n\t\t\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n\t},\n\t\"@id\": \"eDelivery-usage-policy1\",\n\t\"policy\": {\n        \"@context\": \"http://www.w3.org/ns/odrl.jsonld\",\n\t\t\"@type\": \"odrl:Set\",\n\t\t\"odrl:permission\": {\n\t\t\t\"odrl:action\": {\n\t\t\t\t\"@id\": \"odrl:use\"\n\t\t\t},\n\t\t\t\"odrl:constraint\": {\n\t\t\t\t\"odrl:leftOperand\": {\n\t\t\t\t\t\"@id\": \"odrl:deletion\"\n\t\t\t\t},\n\t\t\t\t\"odrl:operator\": {\n\t\t\t\t\t\"@id\": \"odrl:eq\"\n\t\t\t\t},\n\t\t\t\t\"odrl:rightOperand\": \"after_use\"\n\t\t\t}\n\t\t},\n\t\t\"odrl:prohibition\": [],\n\t\t\"odrl:obligation\": [],\n\t\t\"odrl:assigner\": \"provider\",\n\t\t\"odrl:target\": {\n\t\t\t\"@id\": \"eDelivery-asset1\"\n\t\t}\n\t}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:19193/management/v3/policydefinitions",
+              "host": [
+                "localhost"
+              ],
+              "port": "19193",
+              "path": [
+                "management",
+                "v3",
+                "policydefinitions"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Contract Definition",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@id\": \"eDelivery-contract-def1\",\n  \"accessPolicyId\": \"eDelivery-access-policy1\",\n  \"contractPolicyId\": \"eDelivery-usage-policy1\",\n  \"assetsSelector\": [{\n    \"@type\": \"CriterionDto\",\n    \"operandLeft\": \"https://w3id.org/edc/v0.0.1/ns/id\",\n    \"operator\": \"=\",\n    \"operandRight\": \"eDelivery-asset1\"\n  }]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:19193/management/v3/contractdefinitions",
+              "host": [
+                "localhost"
+              ],
+              "port": "19193",
+              "path": [
+                "management",
+                "v3",
+                "contractdefinitions"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Consumer call provider catalog",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"CatalogRequestDto\",\n  \"counterPartyAddress\": \"http://localhost:19194/protocol\",\n  \"protocol\": \"dataspace-protocol-http\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:29193/management/v3/catalog/request",
+              "host": [
+                "localhost"
+              ],
+              "port": "29193",
+              "path": [
+                "management",
+                "v3",
+                "catalog",
+                "request"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Consumer initiate contract negotiation",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n\t\"@context\": {\n\t\t\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\",\n\t\t\"odrl\": \"http://www.w3.org/ns/odrl/2/\",\n\t\t\"edc\": \"https://w3id.org/edc/v0.0.1/ns/\"\n\t},\n\t\"@type\": \"https://w3id.org/edc/v0.0.1/ns/ContractRequest\",\n\t\"counterPartyAddress\": \"http://localhost:19194/protocol\",\n\t\"protocol\": \"dataspace-protocol-http\",\n\t\"policy\": {\n\t\t\"@id\": \"ZURlbGl2ZXJ5LWNvbnRyYWN0LWRlZjE=:ZURlbGl2ZXJ5LWFzc2V0MQ==:ODM0ZTI1OWEtODY4MC00NzMxLTkzOWMtYWRhMjRmZmUyMDQ3\",\n\t\t\"@type\": \"odrl:Offer\",\n\t\t\"odrl:permission\": {\n\t\t\t\"odrl:action\": {\n\t\t\t\t\"@id\": \"odrl:use\"\n\t\t\t},\n\t\t\t\"odrl:constraint\": {\n\t\t\t\t\"odrl:leftOperand\": {\n\t\t\t\t\t\"@id\": \"odrl:deletion\"\n\t\t\t\t},\n\t\t\t\t\"odrl:operator\": {\n\t\t\t\t\t\"@id\": \"odrl:eq\"\n\t\t\t\t},\n\t\t\t\t\"odrl:rightOperand\": \"after_use\"\n\t\t\t}\n\t\t},\n\t\t\"odrl:prohibition\": [\n\n\t\t],\n\t\t\"odrl:obligation\": [\n\n\t\t],\n\t\t\"odrl:assigner\": {\n\t\t\t\"@id\": \"provider\"\n\t\t},\n\t\t\"odrl:target\": {\n\t\t\t\"@id\": \"eDelivery-asset1\"\n\t\t}\n\t}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:29193/management/v3/contractnegotiations",
+              "host": [
+                "localhost"
+              ],
+              "port": "29193",
+              "path": [
+                "management",
+                "v3",
+                "contractnegotiations"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Consumer ContractNegotiation",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:29193/management/v3/contractnegotiations/4e225a11-5152-4326-bc96-36070e3caa8a",
+              "host": [
+                "localhost"
+              ],
+              "port": "29193",
+              "path": [
+                "management",
+                "v3",
+                "contractnegotiations",
+                "4e225a11-5152-4326-bc96-36070e3caa8a"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Consumer Initiate TransferProcesses",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n\t\"@context\": {\n\t\t\"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n\t},\n\t\"@type\": \"TransferRequestDto\",\n\t\"connectorId\": \"provider\",\n\t\"counterPartyAddress\": \"http://localhost:19194/protocol\",\n\t\"contractId\": \"01bb17d6-788e-43d3-9bfb-cd35232e0889\",\n\t\"protocol\": \"dataspace-protocol-http\",\n\t\"transferType\": \"eDelivery-PUSH\",\n\t\"dataDestination\": {\n\t\t\"type\": \"eDelivery\",\n\t\t\"accessServiceIdentifier\": \"12356\",\n\t\t\"requestorIdentifier\": \"test2172\",\n\t\t\"dateFrom\": \"20260112\",\n\t\t\"dateTo\": \"20260612\",\n\t\t\"format\": \"csv\",\n\t\t\"service\": \"testservice\",\n\t\t\"action\": \"download\"\n\t}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:29193/management/v3/transferprocesses",
+              "host": [
+                "localhost"
+              ],
+              "port": "29193",
+              "path": [
+                "management",
+                "v3",
+                "transferprocesses"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Consumer TransferProcess",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:29193/management/v3/transferprocesses/4adc07d0-66d3-4811-b34b-2d6b25aa5454",
+              "host": [
+                "localhost"
+              ],
+              "port": "29193",
+              "path": [
+                "management",
+                "v3",
+                "transferprocesses",
+                "4adc07d0-66d3-4811-b34b-2d6b25aa5454"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Provider TransferProcess",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "localhost:19193/management/v3/transferprocesses/dccb6314-910e-4b4f-9654-8c82a8350a46",
+              "host": [
+                "localhost"
+              ],
+              "port": "19193",
+              "path": [
+                "management",
+                "v3",
+                "transferprocesses",
+                "dccb6314-910e-4b4f-9654-8c82a8350a46"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

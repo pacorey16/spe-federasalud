@@ -22,7 +22,9 @@ Los hospitales manejan datos altamente sensibles (historiales clínicos, diagnó
 
 El denominador común de ambos enfoques es el uso del framework **Eclipse EDC (Eclipse Dataspace Connector)** como base de gobernanza, y el estándar **Dataspace Protocol (DSP)** para la negociación de contratos.
 
-> **Nota sobre el entorno local:** Para las pruebas de este TFM se prescinde de Keycloak, HashiCorp Vault, tenant-services y contract-manager. El proyecto `simpl-edc-main` incluye un mock de identidad (`SimplIdentityService`) que genera tokens JWT con roles hardcodeados, y los contratos son gestionados internamente por EDC sin callback externo. El stack local se reduce a: **PostgreSQL + MinIO + los conectores EDC** (más Kafka y Minikube para el Enfoque B).
+> **Nota sobre el entorno local:** Para las pruebas de este TFM se prescinde de Keycloak, HashiCorp Vault, tenant-services, contract-manager y edc-connector-adapter. El proyecto `simpl-edc-main` incluye un mock de identidad (`SimplIdentityService`) activado mediante `client.okhttp.type=OkHttpClient` y `mocked.agent.identity.attributes` (JSON base64 con roles), y los contratos son gestionados internamente por EDC sin callback externo (`contractmanager.extension.enabled=false`). El stack local se reduce a: **2 instancias PostgreSQL (puertos 5432/5433) + MinIO + los conectores EDC** (más Kafka y Minikube para el Enfoque B).
+
+> **Nota sobre edc-connector-adapter:** El repositorio incluye `edcconnectoradapter-main`, un servicio Spring Boot 3.5.7 que actúa como adaptador REST/Kafka encima de EDC para aplicaciones cliente. Para el PoC no se usa — se interactúa directamente con la Management API de EDC.
 
 ---
 
@@ -82,8 +84,8 @@ La comunicación entre el cloud y el Data Plane hospitalario se realiza a travé
 | Proxy inverso | NGINX con allowlist de IPs | Igual | mTLS + allowlist dinámica |
 | Base de datos | PostgreSQL | 1 instancia Docker | PostgreSQL HA / RDS |
 | Gestión de secretos | — | Props directas en fichero | HashiCorp Vault |
-| Identidad/Auth | `SimplIdentityService` (mock JWT) | Tokens base64 hardcoded | Keycloak + mTLS |
-| Almacenamiento | MinIO S3 | Docker local | MinIO / AWS S3 |
+| Identidad/Auth | `SimplIdentityService` (mock) | `client.okhttp.type=OkHttpClient` + `mocked.agent.identity.attributes` base64 | Keycloak + mTLS |
+| Almacenamiento | MinIO S3 (extensión GXFS `fr.gxfs.s3.*`) | Docker local (minioadmin/minioadmin) | MinIO / AWS S3 |
 | Seguridad | API Keys + ODRL | X-Api-Key en header | JWT firmado + Vault |
 | Observabilidad | — | Logs de consola | OpenTelemetry + ELK |
 
@@ -171,11 +173,11 @@ Capa 6 — Auditoría: Labels en namespace. K8s events. Trazabilidad completa.
 | Componente | Tecnología | Local (PoC) | Producción |
 |---|---|---|---|
 | Framework base | Eclipse EDC 0.10.1 (ServiceExtension) | Igual | Igual |
-| Mensajería | Apache Kafka 3.6.1 | Confluent Docker + PLAINTEXT | Kafka gestionado + SASL_SSL |
+| Mensajería | Apache Kafka 3.6.1 | Confluent cp-kafka:7.5.0 + Zookeeper (local Docker) | Kafka gestionado KRaft (cp-server:8.0.1, helm `kafka-main`) + SASL_SSL |
 | Orquestación K8s | Fabric8 Kubernetes Client 6.13.4 | Minikube | K8s hospital real |
 | Aislamiento | K8s NetworkPolicy + ResourceQuota + RBAC | Igual | + OPA/Gatekeeper |
 | Almacenamiento | MinIO S3 | Docker local | MinIO / AWS S3 |
-| Identidad/Auth | `SimplIdentityService` (mock JWT) | Tokens base64 hardcoded | Keycloak + mTLS |
+| Identidad/Auth | `SimplIdentityService` (mock) | `client.okhttp.type=OkHttpClient` + `mocked.agent.identity.attributes` base64 | Keycloak + mTLS |
 | Secretos | Variables de entorno | Fichero properties / env | K8s Secrets + Vault |
 | Testing | JUnit 5 + Mockito + Fabric8 Mock | Igual | Igual |
 | UI Kafka | Redpanda Console | Docker local | Opcional |

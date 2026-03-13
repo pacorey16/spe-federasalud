@@ -1,0 +1,215 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-deployment
+  labels:
+    app: {{ .Values.deployment.label }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.deployment.label }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.deployment.label }}
+    spec:
+      volumes:
+        - name: config-volume
+          emptyDir: {}
+        - name: vault-secrets
+          emptyDir: { }
+        - name: sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 600
+                  # audience is set during role definition. If none audience was selected during this process,
+                  # then default value is set 'vault'
+                  audience: "vault"
+      serviceAccountName: {{ .Values.serviceAccount.name | default .Release.Namespace }}
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        {{- if .Values.tls.url.participantIdSource }}
+        - name: wait-for-participant-id
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+          image: curlimages/curl:latest
+          command: [ 'sh', '-c' ]
+          args:
+            - |
+              while true; do
+                echo "Checking if participantId is available..."
+                response=$(curl -s -w "\n%{http_code}" {{ .Values.tls.participantIdSource }})
+                status_code=$(echo "$response" | tail -n1)
+                response_body=$(echo "$response" | sed '$d')
+
+                if [ "$status_code" -eq 200 ]; then
+                  # Extract participantId using grep and sed
+                  participant_id=$(echo "$response_body" | grep -o '"participantId":"[^"]*' | sed 's/"participantId":"//')
+
+                  if [ -n "$participant_id" ] && [ "$participant_id" != "null" ]; then
+                    echo "$participant_id" > /config/participant-id
+                    echo "Success: Retrieved participantId: $participant_id"
+                    break
+                  else
+                    echo "Error: participantId not found in response"
+                  fi
+                else
+                  echo "Expected 200 but got ${status_code}. Retrying in 60 seconds..."
+                fi
+                sleep 60
+              done
+              echo "Dependency check passed, starting main container..."
+        {{- end }}
+        - name: vault-agent-init
+          image: alpine:3.23
+          command: [ "/bin/sh", "-c" ]
+          args:
+            - |
+              # Install required tools
+              apk add --no-cache curl jq
+
+              export SA_TOKEN=$(cat /var/run/secrets/sa/token)
+              export VAULT_ADDR="{{ .Values.hashicorp.service }}"
+
+              # Login to vault
+              while true; do
+                RESPONSE=$(curl -s -w "\n%{http_code}" --request POST \
+                --data '{"jwt": "'"$SA_TOKEN"'", "role": "{{ .Values.hashicorp.role }}"}' \
+                  $VAULT_ADDR/v1/auth/kubernetes/login)
+
+                # Extract HTTP status code (last line) and response body
+                HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+                LOGIN_RESPONSE=$(echo "$RESPONSE" | head -n -1)
+
+                if [ "$HTTP_STATUS" -eq 200 ]; then
+                  echo "Successfully logged in to Vault"
+                  break
+                else
+                  echo "Vault login failed with status code: $HTTP_STATUS. Response: $LOGIN_RESPONSE. Retrying in 10 seconds..."
+                  sleep 10
+                fi
+              done
+
+              VAULT_TOKEN=$(echo $LOGIN_RESPONSE | jq -r '.auth.client_token')
+
+              # Get secrets from vault
+              while true; do
+                RESPONSE=$(curl -s -w "\n%{http_code}" \
+                  -H "X-Vault-Token: $VAULT_TOKEN" \
+                  $VAULT_ADDR{{ .Values.secretConfigPath }})
+
+                # Extract HTTP status code (last line) and response body
+                HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+                SECRET_RESPONSE=$(echo "$RESPONSE" | head -n -1)
+
+                if [ "$HTTP_STATUS" -eq 200 ]; then
+                  echo "Successfully retrieved secrets from Vault"
+                  SECRET_JSON="$SECRET_RESPONSE"
+                  break
+                else
+                  echo "Failed to fetch secrets with status code: $HTTP_STATUS. Response: $SECRET_RESPONSE. Retrying in 10 seconds..."
+                  sleep 10
+                fi
+              done
+
+              # this part parse response and format it to be applicable during source process. See containers.args parameter
+              echo $SECRET_JSON | jq -r '.data.data | to_entries[] | "export \(.key)=\"\(.value)\"\n"' > /vault/secrets/config.txt
+
+          volumeMounts:
+            - name: sa-token
+              mountPath: /var/run/secrets/sa
+              readOnly: true
+            - name: vault-secrets
+              mountPath: /vault/secrets
+      containers:
+        - name: {{ .Release.Name }}-container
+          image: {{ .Values.deployment.image }}:{{ .Values.deployment.tag }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+            - name: vault-secrets
+              mountPath: /vault/secrets
+          command: [ "/bin/sh" ]
+          {{- if .Values.tls.url.participantIdSource }}
+          # By providing this variable we want to export edc_participant_id from file /config/participant-id. See init container wait-for-participant-id.
+          args: [ "-c", "source /vault/secrets/config.txt && export edc_participant_id=$(cat /config/participant-id) && java -jar /connector.jar" ]
+          {{- else }}
+          # If Values.tls.participantIdSource is not provided then we go with standard flow and edc_participant_id will be taken from values.yaml
+          args: [ "-c", "source /vault/secrets/config.txt && java -jar /connector.jar" ]
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: web.http.port
+              value: "{{ .Values.service.apiPort | default "29191" }}"
+            - name: web.http.path
+              value: "{{ .Values.ingress.apiPath | default "/api" }}"
+            - name: web.http.management.port
+              value: "{{ .Values.service.managementPort | default "29193" }}"
+            - name: web.http.management.path
+              value: "{{ .Values.ingress.managementPath | default "/management" }}"
+            - name: web.http.protocol.port
+              value: "{{ .Values.service.protocolPort | default "29194" }}"
+            - name: web.http.protocol.path  
+              value: "{{ .Values.ingress.protocolPath | default "/protocol" }}"
+            - name: web.http.control.port
+              value: "{{ .Values.service.controlPort | default "29192" }}"
+            - name: web.http.control.path
+              value: {{ .Values.ingress.controlPath | default "/control" }}
+            - name: web.http.public.port
+              value: "{{ .Values.service.publicPort | default "29291" }}"
+            - name: web.http.public.path
+              value: "{{ .Values.ingress.publicPath | default "/public" }}"
+            - name: edc.dsp.callback.address
+              value: {{.Values.deployment.callbackAddress }}{{ .Values.ingress.protocolPath }}
+            # by providing this url we want to fetch edc.participant.id from authentication provider -> see init container wait-for-participant-id.
+            # if tls.participantIdSource is not provided then the edc.participant.id value from values.yaml is taken
+            {{- if not .Values.tls.url.participantIdSource }}
+            - name: edc.participant.id
+              value: {{ .Values.env.edcParticipantId }}
+            {{- end }}
+            - name: edc.ids.id
+              value: {{ .Values.env.edcIdsId }}
+            - name: edc.mock.region
+              value: "eu"
+            - name: edc.datasource.default.url
+              value: {{ .Values.env.datasourceurl }}
+            - name: edc.datasource.default.user
+              value: "{{ .Values.postgresql.username }}"
+            - name: edc.datasource.policy.url
+              value: {{ .Values.env.datasourceurl }}
+            - name: edc.datasource.policy.user
+              value: "{{ .Values.postgresql.username }}"
+            - name: edc.sql.schema.autocreate
+              value: "true"
+            - name: client.authenticationprovider.url
+              value: {{ .Values.tls.url.authenticationprovider }}
+            - name: contractmanager.extension.enabled
+              value: "{{ .Values.contractmanager.extension.enabled }}"
+            {{- if .Values.contractmanager.extension.enabled }}
+            - name: contractmanager.url
+              value: {{ .Values.contractmanager.url }}
+            {{- end }}
+            {{- if .Values.javadebug.enabled }}
+            - name: JAVA_TOOL_OPTIONS
+              value: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:{{ .Values.javadebug.port }}"
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.service.apiPort | default "29191" }}
+              name: api-port
+            - containerPort: {{ .Values.service.protocolPort | default "29194" }}
+              name: protocol-port
+            - containerPort: {{ .Values.service.managementPort | default "29193" }}
+              name: management-port
+            - containerPort: {{ .Values.service.publicPort | default "29291" }}
+              name: public-port
+            - containerPort: {{ .Values.service.controlPort | default "29192" }}
+              name: control-port
