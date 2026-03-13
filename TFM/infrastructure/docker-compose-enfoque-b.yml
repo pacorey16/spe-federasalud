@@ -1,0 +1,105 @@
+version: '3.8'
+
+# =============================================================================
+# Docker Compose — Enfoque B: Kafka + Kubernetes SPE
+# Complementa docker-compose-common.yml
+#
+# Levantar con:
+#   docker compose -f docker-compose-common.yml -f docker-compose-enfoque-b.yml up -d
+# O de forma independiente (requiere common ya levantado):
+#   docker compose -f docker-compose-enfoque-b.yml up -d
+#
+# NOTA SOBRE VERSIÓN:
+#   Este fichero usa Confluent Platform 7.5.0 con ZooKeeper para el entorno
+#   de desarrollo local. El entorno de producción usa KRaft sin ZooKeeper
+#   (Confluent cp-server:8.0.1) desplegado vía Helm chart en kafka-main/.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # ZooKeeper — Coordinación del cluster Kafka (solo local)
+  # En producción se usa KRaft (ver kafka-main/charts/)
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: simpl-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Kafka Broker — Mensajería asíncrona
+  #
+  # DOS listeners:
+  #   PLAINTEXT://kafka:9092     → comunicación entre contenedores Docker
+  #   PLAINTEXT_HOST://localhost:9094 → acceso desde el host (y desde Minikube
+  #                                     via host.minikube.internal:9094)
+  #
+  # El SPE-Connector en Minikube usa: host.minikube.internal:9094
+  # Los procesos Java locales usan: localhost:9094
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: simpl-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"   # interno Docker
+      - "9094:9094"   # externo (host + Minikube)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      # No crear topics automáticamente — se crean explícitamente con kafka-topics
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_MESSAGE_MAX_BYTES: 10485760  # 10MB max para órdenes de ejecución
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redpanda Console — UI web para inspeccionar Kafka
+  # URL: http://localhost:8080
+  #
+  # Permite:
+  #   - Ver topics y mensajes en tiempo real
+  #   - Publicar mensajes de prueba manualmente
+  #   - Ver consumer groups y offsets del SPE-Connector
+  # ---------------------------------------------------------------------------
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: simpl-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # NOTA: El SPE-Connector se despliega en Minikube (no en Docker Compose)
+  # Ver enfoque-b-kafka-spe/README.md para instrucciones de despliegue.
+  #
+  # El SPE-Connector conecta a Kafka usando:
+  #   SPE_KAFKA_BOOTSTRAP_SERVERS=host.minikube.internal:9094
+  # ---------------------------------------------------------------------------

@@ -1,0 +1,128 @@
+# =============================================================================
+# Deployment — SPE-Connector
+#
+# El SPE-Connector es el componente que:
+#   1. Consume mensajes del topic Kafka (órdenes de ejecución del cloud)
+#   2. Crea namespaces K8s efímeros y lanza Jobs con el algoritmo
+#   3. El Job accede a datos locales (readOnly) y sube resultados a S3
+#
+# NOTA: imagen imagePullPolicy: Never porque se construye en el daemon
+#       de Minikube con: eval $(minikube docker-env --profile simpl-local)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spe-connector
+  namespace: simpl-spe
+  labels:
+    app: spe-connector
+    app.kubernetes.io/name: spe-connector
+    app.kubernetes.io/version: "1.0.0-SNAPSHOT"
+    app.kubernetes.io/part-of: spe-federasalud
+    app.kubernetes.io/component: kafka-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spe-connector
+  template:
+    metadata:
+      labels:
+        app: spe-connector
+        app.kubernetes.io/name: spe-connector
+        app.kubernetes.io/version: "1.0.0-SNAPSHOT"
+    spec:
+      serviceAccountName: spe-connector-sa
+
+      # -----------------------------------------------------------------------
+      # Seguridad del Pod
+      # -----------------------------------------------------------------------
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: spe-connector
+          image: simpl/spe-connector:latest
+          imagePullPolicy: Never  # imagen local en Minikube
+
+          # -----------------------------------------------------------------------
+          # Seguridad del contenedor
+          # -----------------------------------------------------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          # -----------------------------------------------------------------------
+          # Configuración desde ConfigMap
+          # -----------------------------------------------------------------------
+          envFrom:
+            - configMapRef:
+                name: spe-connector-config
+
+          # Variables de entorno adicionales (pueden sobreescribir el ConfigMap)
+          env:
+            - name: SPE_KAFKA_BOOTSTRAP_SERVERS
+              value: "host.minikube.internal:9094"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+          # -----------------------------------------------------------------------
+          # Recursos
+          # -----------------------------------------------------------------------
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          # -----------------------------------------------------------------------
+          # Health checks
+          # -----------------------------------------------------------------------
+          # El SPE-Connector no expone HTTP — los health checks usan liveness basado
+          # en proceso. En producción añadir un endpoint HTTP de health.
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f spe-launcher"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f spe-launcher"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+          # -----------------------------------------------------------------------
+          # Volumen temporal para escritura (readOnlyRootFilesystem requiere /tmp)
+          # -----------------------------------------------------------------------
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+
+      # -----------------------------------------------------------------------
+      # Tolerancias y afinidad
+      # -----------------------------------------------------------------------
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

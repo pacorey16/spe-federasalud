@@ -1,0 +1,84 @@
+# =============================================================================
+# RBAC — ServiceAccount + ClusterRole + ClusterRoleBinding
+#
+# El SPE-Connector necesita permisos para:
+#   - Crear y eliminar namespaces efímeros (spe-exec-*)
+#   - Crear Jobs, Pods, NetworkPolicies, ResourceQuotas en esos namespaces
+#   - Leer PersistentVolumes y PersistentVolumeClaims
+#
+# Principio de mínimo privilegio: solo los verbos estrictamente necesarios.
+# =============================================================================
+
+---
+# ServiceAccount para el SPE-Connector
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spe-connector-sa
+  namespace: simpl-spe
+  labels:
+    app.kubernetes.io/name: spe-connector
+    app.kubernetes.io/part-of: spe-federasalud
+
+---
+# ClusterRole con los permisos mínimos necesarios
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spe-connector-role
+  labels:
+    app.kubernetes.io/name: spe-connector
+    app.kubernetes.io/part-of: spe-federasalud
+rules:
+  # Gestión de namespaces efímeros (crear y eliminar spe-exec-*)
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "delete"]
+
+  # Creación de Jobs (el algoritmo corre como Job K8s)
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete", "watch"]
+
+  # Gestión de Pods (para logs y estado)
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch", "delete"]
+
+  # NetworkPolicy de aislamiento para cada namespace efímero
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "delete"]
+
+  # ResourceQuota para limitar recursos del namespace efímero
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list", "create", "delete"]
+
+  # PersistentVolumes y PVCs (montar datos del hospital como readOnly)
+  - apiGroups: [""]
+    resources: ["persistentvolumes", "persistentvolumeclaims"]
+    verbs: ["get", "list"]
+
+  # ConfigMaps y Secrets en los namespaces efímeros
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "create", "delete"]
+
+---
+# Vincular el ServiceAccount con el ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spe-connector-rolebinding
+  labels:
+    app.kubernetes.io/name: spe-connector
+    app.kubernetes.io/part-of: spe-federasalud
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spe-connector-role
+subjects:
+  - kind: ServiceAccount
+    name: spe-connector-sa
+    namespace: simpl-spe

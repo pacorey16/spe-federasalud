@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: simpl-spe
+  labels:
+    # Etiquetas para auditoría y trazabilidad
+    app.kubernetes.io/part-of: spe-federasalud
+    app.kubernetes.io/component: spe-connector
+    environment: local-poc

@@ -1,0 +1,62 @@
+# =============================================================================
+# NetworkPolicy — Aislamiento de Red del SPE-Connector
+#
+# El SPE-Connector en el namespace simpl-spe necesita:
+#   - SALIDA hacia Kafka (9094) para consumir mensajes
+#   - SALIDA hacia la API de Kubernetes (6443) para crear namespaces/Jobs
+#   - SALIDA hacia DNS (53)
+#   - NINGUNA entrada desde el exterior
+#
+# Los Jobs efímeros en spe-exec-* tienen su propia NetworkPolicy
+# (creada dinámicamente por el SPE-Connector en el código Java).
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spe-connector-netpol
+  namespace: simpl-spe
+  labels:
+    app.kubernetes.io/name: spe-connector
+    app.kubernetes.io/part-of: spe-federasalud
+spec:
+  podSelector:
+    matchLabels:
+      app: spe-connector
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # -------------------------------------------------------------------------
+  # INGRESS: NINGÚN tráfico de entrada permitido
+  # El SPE-Connector solo consume (outbound) — no sirve tráfico entrante.
+  # -------------------------------------------------------------------------
+  ingress: []
+
+  # -------------------------------------------------------------------------
+  # EGRESS: solo los destinos estrictamente necesarios
+  # -------------------------------------------------------------------------
+  egress:
+    # DNS — resolución de nombres (necesario para cualquier conexión de red)
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    # Kafka broker (acceso al host desde Minikube)
+    # En local: host.minikube.internal:9094
+    # En producción: IP o DNS del broker Kafka gestionado + puerto 9093 (SASL_SSL)
+    - ports:
+        - port: 9094
+          protocol: TCP
+        - port: 9092
+          protocol: TCP
+
+    # API Server de Kubernetes (para crear namespaces y Jobs)
+    - ports:
+        - port: 6443
+          protocol: TCP
+        - port: 443
+          protocol: TCP

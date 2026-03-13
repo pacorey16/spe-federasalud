@@ -1,0 +1,51 @@
+version: '3.8'
+
+# =============================================================================
+# Docker Compose — Enfoque A: Split Architecture
+# Complementa docker-compose-common.yml
+#
+# Levantar con:
+#   docker compose -f docker-compose-common.yml -f docker-compose-enfoque-a.yml up -d
+# O de forma independiente (requiere common ya levantado):
+#   docker compose -f docker-compose-enfoque-a.yml up -d
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # NGINX — Reverse Proxy con IP Allowlist para el hospital
+  #
+  # Simula el firewall perimetral del hospital:
+  # - Solo IPs del cloud (Control Plane) pueden acceder al Data Plane
+  # - Puerto 39443: único punto de entrada al hospital desde el exterior
+  # - Redirige al Data Plane en host:39291 (proceso Java externo)
+  #
+  # Config: ../enfoque-a-split-architecture/edc-provider/nginx/nginx.conf
+  # Logs:   docker logs simpl-nginx-hospital
+  # ---------------------------------------------------------------------------
+  nginx-hospital:
+    image: nginx:1.25-alpine
+    container_name: simpl-nginx-hospital
+    ports:
+      - "39443:39443"
+    volumes:
+      - ../enfoque-a-split-architecture/edc-provider/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      # Permite que NGINX resuelva host.docker.internal → IP del host macOS/Linux
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # NOTA: El Data Plane del hospital se arranca como proceso Java externo
+  # (no en Docker) para simplificar el PoC. Ver README.md del Enfoque A,
+  # paso 3: arranque del Data Plane.
+  #
+  # Comando:
+  #   java -jar simpl-edc-main/target/basic-connector.jar \
+  #     -Dedc.fs.config=enfoque-a-split-architecture/edc-provider/data-plane/config/dataplane-config.properties
+  # ---------------------------------------------------------------------------

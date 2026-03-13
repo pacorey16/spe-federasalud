@@ -1,0 +1,91 @@
+version: '3.8'
+
+# =============================================================================
+# Docker Compose — Infraestructura Base Compartida
+# Usada por AMBOS enfoques (A y B)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL para el proveedor (hospital / EDC provider)
+  # Puerto 5432 en el host — referenciado en provider-config.properties como:
+  #   edc.datasource.default.url=jdbc:postgresql://localhost:5432/postgres
+  # ---------------------------------------------------------------------------
+  provider-db:
+    image: postgres:15-alpine
+    container_name: simpl-provider-db
+    environment:
+      POSTGRES_USER: edc
+      POSTGRES_PASSWORD: edc_password
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - provider_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edc -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL para el consumidor (investigador / EDC consumer)
+  # Puerto 5433 en el host (mapea al 5432 interno) — referenciado en
+  # consumer-config.properties como:
+  #   edc.datasource.default.url=jdbc:postgresql://localhost:5433/postgres
+  # ---------------------------------------------------------------------------
+  consumer-db:
+    image: postgres:15-alpine
+    container_name: simpl-consumer-db
+    environment:
+      POSTGRES_USER: edc
+      POSTGRES_PASSWORD: edc_password
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - consumer_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edc -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # MinIO — Almacenamiento S3 compatible
+  # API: puerto 9000 | Consola web: puerto 9001
+  # Credenciales: minioadmin / minioadmin
+  #
+  # Buckets necesarios (crear tras el arranque con minio/mc):
+  #   - provider-data    → datos originales del hospital
+  #   - consumer-results → resultados de transferencias / algoritmos
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: simpl-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  provider_db_data:
+    driver: local
+  consumer_db_data:
+    driver: local
+  minio_data:
+    driver: local

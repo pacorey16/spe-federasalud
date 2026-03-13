@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spe-connector-config
+  namespace: simpl-spe
+  labels:
+    app.kubernetes.io/name: spe-connector
+    app.kubernetes.io/part-of: spe-federasalud
+data:
+  # -------------------------------------------------------------------------
+  # KAFKA — Bootstrap servers
+  # En local: host.minikube.internal:9094 (el Kafka del host accesible desde Minikube)
+  # En producción: DNS del broker Kafka gestionado (SASL_SSL)
+  # -------------------------------------------------------------------------
+  SPE_KAFKA_BOOTSTRAP_SERVERS: "host.minikube.internal:9094"
+  SPE_KAFKA_TOPIC: "spe-execution-requests"
+  SPE_KAFKA_GROUP_ID: "spe-hospital-connector"
+  SPE_KAFKA_AUTO_OFFSET_RESET: "earliest"
+
+  # -------------------------------------------------------------------------
+  # KUBERNETES — Configuración del sandbox efímero
+  # -------------------------------------------------------------------------
+  SPE_K8S_NAMESPACE_PREFIX: "spe-exec-"
+  SPE_K8S_JOB_TTL_SECONDS: "60"
+  SPE_K8S_RESOURCE_QUOTA_CPU: "4"
+  SPE_K8S_RESOURCE_QUOTA_MEMORY: "4Gi"
+
+  # -------------------------------------------------------------------------
+  # PVC — Datos del hospital (readOnly)
+  # -------------------------------------------------------------------------
+  SPE_HOSPITAL_PVC_NAME: "pvc-hospital-data"
+  SPE_HOSPITAL_DATA_MOUNT_PATH: "/data/input"
+
+  # -------------------------------------------------------------------------
+  # LOGGING
+  # -------------------------------------------------------------------------
+  SPE_LOG_LEVEL: "INFO"
